@@ -1,36 +1,51 @@
-# This is a basic workflow to help you get started with Actions
+name: Deploy automatico para o servidor
 
-name: Deploy automático para o servidor
+env:
+    hostname: 52.170.133.239
+    username: azureuser
+    destination: /var/www/html/webtech.network
+    target_username: www-data
+    target_group: www-data
+    excluded_items_command: "--exclude .git --exclude .github --exclude .vscode"
 
-# Controls when the workflow will run
 on:
-  # Triggers the workflow on push or pull request events but only for the "main" branch
-  push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
+    push:
+        branches:
+            - main
+    pull_request:
+        branches:
+            - main
+        types:
+            - closed
 
-  # Allows you to run this workflow manually from the Actions tab
-  workflow_dispatch:
-
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
-  # This workflow contains a single job called "build"
-  build:
-    # The type of runner that the job will run on
-    runs-on: ubuntu-latest
+    deploy:
+        runs-on: ubuntu-latest
+        steps:
+            # Obtendo o código do repositório
+            - uses: actions/checkout@v4
 
-    # Steps represent a sequence of tasks that will be executed as part of the job
-    steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
-      - uses: actions/checkout@v4
+            # Instalando os pacotes necessários
+            - run: sudo apt update
+            - run: sudo apt install -y rsync
+            - run: sudo apt install -y openssh-client
+            - run: sudo apt install -y secure-delete
+            - run: sudo apt install -y sshpass
 
-      # Runs a single command using the runners shell
-      - name: Run a one-line script
-        run: echo Hello, world!
+            # Obtendo a chave ssh privada
+            - run: mkdir -p ~/.ssh
+            - run: echo "${{secrets.SSH_PRIVATE_KEY}}" > ~/.ssh/id_rsa
+            - run: chmod 600 ~/.ssh/id_rsa
 
-      # Runs a set of commands using the runners shell
-      - name: Run a multi-line script
-        run: |
-          echo Add other actions to build,
-          echo test, and deploy your project.
+            # Alterando as permissões do diretório no servidor para poder copiar os arquivos
+            - run: sshpass -p "${{secrets.SERVER_PASSWORD}}" ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ${{env.username}}@${{env.hostname}} "echo \"${{secrets.SERVER_PASSWORD}}\" | sudo -S chown --recursive ${{env.username}} ${{env.destination}}"
+
+            # Sincronizando os arquivos com o servidor
+            - run: rsync -p ${{secrets.SERVER_PASSWORD}} --archive --verbose --compress --delete ${{env.excluded_items_command}} -e "ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa" ./ ${{env.username}}@${{env.hostname}}:${{env.destination}}
+              continue-on-error: true
+
+            # Alterando as permissões do diretório no servidor para poder ser acessado pelo servidor web
+            - run: sshpass -p "${{secrets.SERVER_PASSWORD}}" ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ${{env.username}}@${{env.hostname}} "echo \"${{secrets.SERVER_PASSWORD}}\" | sudo -S chown --recursive ${{env.target_username}}:${{env.target_group}} ${{env.destination}}"
+            
+            # Apagando a chave ssh privada
+            - run: srm ~/.ssh/id_rsa
